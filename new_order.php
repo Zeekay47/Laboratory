@@ -55,26 +55,51 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST' && isset($_POST['create_order'])) {
             $db->execute();
             $order_id = $db->lastInsertId();
             
-            // Add selected tests to order
+            // Add selected tests to order - GROUPED BY SAMPLE TYPE
             $selected_tests = $_POST['selected_tests'];
-            foreach ($selected_tests as $test_id) {
-                // Generate sample ID
+            
+            // Get all selected tests with their sample types
+            if (!empty($selected_tests)) {
+                // Create placeholders for IN clause
+                $placeholders = implode(',', array_fill(0, count($selected_tests), '?'));
+                $db->query("SELECT id, sample_type FROM tests WHERE id IN ($placeholders)");
+                
+                foreach ($selected_tests as $index => $test_id) {
+                    $db->bind($index + 1, $test_id);
+                }
+                
+                $test_details = $db->resultSet();
+                
+                // Group test IDs by sample type
+                $tests_by_sample = [];
+                foreach ($test_details as $test) {
+                    $tests_by_sample[$test['sample_type']][] = $test['id'];
+                }
+                
+                // Get base ID for sample numbering
                 $db->query('SELECT MAX(id) as max_id FROM order_tests');
                 $result = $db->single();
-                $sample_next_id = ($result['max_id'] ?? 0) + 1;
-                $sample_id = 'SMP-' . str_pad($sample_next_id, 6, '0', STR_PAD_LEFT);
+                $base_sample_id = ($result['max_id'] ?? 0) + 1;
                 
-                $db->query('SELECT sample_type FROM tests WHERE id = :id');
-                $db->bind(':id', $test_id);
-                $test = $db->single();
-                
-                $db->query('INSERT INTO order_tests (order_id, test_id, sample_id, sample_type) 
-                           VALUES (:order_id, :test_id, :sample_id, :sample_type)');
-                $db->bind(':order_id', $order_id);
-                $db->bind(':test_id', $test_id);
-                $db->bind(':sample_id', $sample_id);
-                $db->bind(':sample_type', $test['sample_type']);
-                $db->execute();
+                // Insert tests grouped by sample type
+                $sample_index = 0;
+                foreach ($tests_by_sample as $sample_type => $test_ids) {
+                    // Generate sample ID for this sample type group
+                    $sample_id = 'SMP-' . str_pad($base_sample_id + $sample_index, 6, '0', STR_PAD_LEFT);
+                    
+                    // Insert all tests with this sample type using the same sample ID
+                    foreach ($test_ids as $test_id) {
+                        $db->query('INSERT INTO order_tests (order_id, test_id, sample_id, sample_type) 
+                                   VALUES (:order_id, :test_id, :sample_id, :sample_type)');
+                        $db->bind(':order_id', $order_id);
+                        $db->bind(':test_id', $test_id);
+                        $db->bind(':sample_id', $sample_id);
+                        $db->bind(':sample_type', $sample_type);
+                        $db->execute();
+                    }
+                    
+                    $sample_index++;
+                }
             }
             
             // Update patient's last visit date
@@ -84,6 +109,9 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST' && isset($_POST['create_order'])) {
             
             $db->query('COMMIT');
             
+            // Log the sample grouping for debugging
+            error_log("Order #$order_number created with " . (isset($tests_by_sample) ? count($tests_by_sample) : 0) . " sample groups");
+            
             // Redirect to order confirmation
             header('Location: order_confirmation.php?id=' . $order_id);
             exit();
@@ -91,6 +119,7 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST' && isset($_POST['create_order'])) {
         } catch (Exception $e) {
             $db->query('ROLLBACK');
             $message = '<div class="alert alert-danger">Error creating order: ' . $e->getMessage() . '</div>';
+            error_log("Order creation error: " . $e->getMessage());
         }
     }
 }
@@ -156,6 +185,7 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST' && isset($_POST['create_order'])) {
                             <div class="card">
                                 <div class="card-header bg-light">
                                     <h6>Select Tests</h6>
+                                    <small class="text-muted">Tests with same sample type will share the same sample container</small>
                                 </div>
                                 <div class="card-body">
                                     <div class="row" id="testSelection">
@@ -170,14 +200,15 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST' && isset($_POST['create_order'])) {
                                                                value="<?php echo $test['id']; ?>"
                                                                id="test_<?php echo $test['id']; ?>"
                                                                data-test-name="<?php echo htmlspecialchars($test['test_name']); ?>"
-                                                               data-test-code="<?php echo htmlspecialchars($test['test_code']); ?>">
+                                                               data-test-code="<?php echo htmlspecialchars($test['test_code']); ?>"
+                                                               data-sample-type="<?php echo htmlspecialchars($test['sample_type']); ?>">
                                                         <label class="form-check-label" for="test_<?php echo $test['id']; ?>">
                                                             <strong><?php echo $test['test_name']; ?></strong>
                                                             <small class="text-muted">(<?php echo $test['test_code']; ?>)</small>
                                                             <br>
                                                             <small class="text-muted">
-                                                                Sample: <?php echo $test['sample_type']; ?> | 
-                                                                Turnaround: <?php echo $test['turnaround_hours']; ?> hours
+                                                                <span class="badge bg-info"><?php echo $test['sample_type']; ?></span>
+                                                                | Turnaround: <?php echo $test['turnaround_hours']; ?> hours
                                                                 <?php if ($test['fasting_required']): ?>
                                                                     | <span class="text-danger">Fasting Required</span>
                                                                 <?php endif; ?>
@@ -210,10 +241,17 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST' && isset($_POST['create_order'])) {
                             <div class="card">
                                 <div class="card-header bg-light">
                                     <h6>Selected Tests <span id="selectedCount" class="badge bg-primary">0</span></h6>
+                                    <small class="text-muted">Tests grouped by sample type will share sample containers</small>
                                 </div>
                                 <div class="card-body">
                                     <div id="selectedTestsList" class="mb-3">
                                         <p class="text-muted">No tests selected yet.</p>
+                                    </div>
+                                    
+                                    <!-- Sample Grouping Preview -->
+                                    <div id="sampleGroupingPreview" class="mb-4" style="display: none;">
+                                        <h6>Sample Grouping Preview</h6>
+                                        <div id="sampleGroups" class="row"></div>
                                     </div>
                                     
                                     <div class="d-grid">
@@ -237,38 +275,105 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST' && isset($_POST['create_order'])) {
 
 <script>
 $(document).ready(function() {
-    // Update selected tests count and list
-    function updateSelectedTests() {
-        var selected = [];
+    // Function to group selected tests by sample type
+    function groupTestsBySampleType() {
+        var testsBySample = {};
+        
         $('.test-checkbox:checked').each(function() {
             var testName = $(this).data('test-name');
             var testCode = $(this).data('test-code');
-            selected.push({
+            var sampleType = $(this).data('sample-type');
+            
+            if (!testsBySample[sampleType]) {
+                testsBySample[sampleType] = [];
+            }
+            
+            testsBySample[sampleType].push({
                 name: testName,
                 code: testCode
             });
         });
         
-        var count = selected.length;
-        $('#selectedCount').text(count);
+        return testsBySample;
+    }
+    
+    // Update selected tests count, list and sample grouping preview
+    function updateSelectedTests() {
+        var testsBySample = groupTestsBySampleType();
+        var totalCount = 0;
         
+        // Calculate total tests count
+        for (var sampleType in testsBySample) {
+            totalCount += testsBySample[sampleType].length;
+        }
+        
+        $('#selectedCount').text(totalCount);
+        
+        // Update selected tests list
         var listHtml = '';
-        if (count > 0) {
+        if (totalCount > 0) {
             listHtml = '<div class="list-group">';
-            selected.forEach(function(test, index) {
-                listHtml += '<div class="list-group-item d-flex justify-content-between align-items-center">';
-                listHtml += '<div>';
-                listHtml += '<strong>' + test.name + '</strong>';
-                listHtml += '<small class="text-muted ms-2">(' + test.code + ')</small>';
+            var testIndex = 1;
+            
+            for (var sampleType in testsBySample) {
+                listHtml += '<div class="list-group-item list-group-item-secondary">';
+                listHtml += '<strong><i class="bi bi-droplet"></i> ' + sampleType + '</strong>';
+                listHtml += '<span class="badge bg-info ms-2">' + testsBySample[sampleType].length + ' test(s)</span>';
                 listHtml += '</div>';
-                listHtml += '<span class="badge bg-secondary">#' + (index + 1) + '</span>';
-                listHtml += '</div>';
-            });
+                
+                testsBySample[sampleType].forEach(function(test) {
+                    listHtml += '<div class="list-group-item d-flex justify-content-between align-items-center">';
+                    listHtml += '<div>';
+                    listHtml += '<strong>' + test.name + '</strong>';
+                    listHtml += '<small class="text-muted ms-2">(' + test.code + ')</small>';
+                    listHtml += '</div>';
+                    listHtml += '<span class="badge bg-secondary">#' + (testIndex++) + '</span>';
+                    listHtml += '</div>';
+                });
+            }
             listHtml += '</div>';
+            
+            // Show sample grouping preview
+            showSampleGroupingPreview(testsBySample);
         } else {
             listHtml = '<p class="text-muted">No tests selected yet.</p>';
+            $('#sampleGroupingPreview').hide();
         }
+        
         $('#selectedTestsList').html(listHtml);
+    }
+    
+    // Show sample grouping preview
+    function showSampleGroupingPreview(testsBySample) {
+        var sampleIndex = 1;
+        var groupsHtml = '';
+        
+        for (var sampleType in testsBySample) {
+            var testCount = testsBySample[sampleType].length;
+            var testList = testsBySample[sampleType].map(function(test, index) {
+                return '<small>' + (index + 1) + '. ' + test.name + '</small>';
+            }).join('<br>');
+            
+            groupsHtml += '<div class="col-md-4 mb-3">';
+            groupsHtml += '<div class="card border-primary">';
+            groupsHtml += '<div class="card-header bg-primary text-white">';
+            groupsHtml += '<strong>Sample #' + sampleIndex + '</strong>';
+            groupsHtml += '</div>';
+            groupsHtml += '<div class="card-body">';
+            groupsHtml += '<h6 class="card-title">' + sampleType + '</h6>';
+            groupsHtml += '<p class="card-text">';
+            groupsHtml += '<strong>' + testCount + ' test(s) will share this sample</strong><br>';
+            groupsHtml += testList;
+            groupsHtml += '</p>';
+            groupsHtml += '</div>';
+            groupsHtml += '</div>';
+            groupsHtml += '</div>';
+            
+            sampleIndex++;
+        }
+        
+        $('#sampleGroups').html(groupsHtml);
+        $('#sampleGroupingPreview').show();
     }
     
     // Initialize
@@ -284,7 +389,18 @@ $(document).ready(function() {
             alert('Please select at least one test.');
             return false;
         }
-        return true;
+        
+        // Optional: Show confirmation with sample grouping info
+        var testsBySample = groupTestsBySampleType();
+        var sampleCount = Object.keys(testsBySample).length;
+        var testCount = $('.test-checkbox:checked').length;
+        
+        if (confirm('Creating order with ' + testCount + ' test(s) requiring ' + sampleCount + ' sample container(s). Continue?')) {
+            return true;
+        } else {
+            e.preventDefault();
+            return false;
+        }
     });
 });
 </script>

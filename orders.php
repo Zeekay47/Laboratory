@@ -196,7 +196,7 @@ $orders = $db->resultSet();
                                                 <a href="order_confirmation.php?id=<?php echo $order['id']; ?>" 
                                                 class="btn btn-outline-info" 
                                                 title="Print Sample Labels & Receipt">
-                                                    <i class="bi bi-tags"></i> <!-- Changed icon from printer to tags -->
+                                                    <i class="bi bi-tags"></i> 
                                                 </a>
                                             <?php endif; ?>                                            
                                             <?php if ($order['status'] == 'completed'): ?>

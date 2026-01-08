@@ -21,6 +21,51 @@ if (!$order_id) {
     exit();
 }
 
+// Process test removal
+if ($_SERVER['REQUEST_METHOD'] == 'POST' && isset($_POST['remove_test']) && isset($_POST['test_id'])) {
+    if ($_SESSION['role'] == 'receptionist') {
+        $test_id = $_POST['test_id'];
+        
+        // Check if order is still pending
+        $db->query('SELECT status FROM orders WHERE id = :id');
+        $db->bind(':id', $order_id);
+        $order_status = $db->single()['status'];
+        
+        if ($order_status == 'pending') {
+            try {
+                $db->query('BEGIN TRANSACTION');
+                
+                // Remove the test from order_tests
+                $db->query('DELETE FROM order_tests WHERE order_id = :order_id AND test_id = :test_id');
+                $db->bind(':order_id', $order_id);
+                $db->bind(':test_id', $test_id);
+                $db->execute();
+                
+                // Check if this was the only test using this sample_id
+                $db->query('SELECT COUNT(*) as remaining_tests FROM order_tests WHERE sample_id = 
+                           (SELECT sample_id FROM order_tests WHERE order_id = :order_id AND test_id = :test_id)');
+                $db->bind(':order_id', $order_id);
+                $db->bind(':test_id', $test_id);
+                $result = $db->single();
+                
+                $db->query('COMMIT');
+                
+                $_SESSION['success'] = 'Test removed successfully!';
+                
+                // Refresh the page to show updated list
+                header('Location: view_order.php?id=' . $order_id);
+                exit();
+                
+            } catch (Exception $e) {
+                $db->query('ROLLBACK');
+                $_SESSION['error'] = 'Error removing test: ' . $e->getMessage();
+            }
+        } else {
+            $_SESSION['error'] = 'Cannot modify order - status is no longer pending';
+        }
+    }
+}
+
 // Store the referrer in session if it's an order list page
 if (isset($_SERVER['HTTP_REFERER'])) {
     $referrer = $_SERVER['HTTP_REFERER'];
@@ -39,22 +84,32 @@ $db->query('SELECT o.*, p.* FROM orders o
 $db->bind(':id', $order_id);
 $order = $db->single();
 
-// Fetch order tests with details
+// Fetch order tests with details - group by sample_id to identify shared samples
 $db->query('SELECT ot.*, t.test_name, t.test_code, t.category, t.sample_type,
                    (SELECT COUNT(*) FROM test_results tr WHERE tr.order_test_id = ot.id) as result_count
             FROM order_tests ot 
             JOIN tests t ON ot.test_id = t.id 
             WHERE ot.order_id = :order_id 
-            ORDER BY t.category, t.test_name');
+            ORDER BY ot.sample_id, t.category, t.test_name');
 $db->bind(':order_id', $order_id);
 $tests = $db->resultSet();
+
+// Group tests by sample_id to identify shared samples
+$tests_by_sample = [];
+foreach ($tests as $test) {
+    $sample_id = $test['sample_id'];
+    if (!isset($tests_by_sample[$sample_id])) {
+        $tests_by_sample[$sample_id] = [];
+    }
+    $tests_by_sample[$sample_id][] = $test;
+}
 
 // Check if current user can access this order
 $user_role = $_SESSION['role'];
 $can_edit = ($user_role == 'receptionist' && $order['status'] == 'pending');
 $can_verify = ($user_role == 'manager' && $order['status'] == 'processing');
 $can_generate_report = ($user_role == 'receptionist' || $user_role == 'manager') && 
-                       ($order['status'] == 'completed' || $order['status'] == 'processing');
+                       ($order['status'] == 'completed');
 
 // Determine the back URL based on user role and referrer
 $back_url = 'index.php'; // Default fallback
@@ -81,12 +136,25 @@ if (isset($_SESSION['order_list_referrer'])) {
 
 <div class="row">
     <div class="col-md-12">
+        <?php 
+        // Display success/error messages
+        if (isset($_SESSION['success'])) {
+            echo '<div class="alert alert-success">' . $_SESSION['success'] . '</div>';
+            unset($_SESSION['success']);
+        }
+        if (isset($_SESSION['error'])) {
+            echo '<div class="alert alert-danger">' . $_SESSION['error'] . '</div>';
+            unset($_SESSION['error']);
+        }
+        ?>
+        
         <div class="card">
             <div class="card-header bg-primary text-white">
                 <div class="d-flex justify-content-between align-items-center">
                     <h5>Order: <?php echo $order['order_number']; ?></h5>
                     <div>
                         <span class="badge bg-light text-dark">Status: <?php echo $order['status']; ?></span>
+                        
                     </div>
                 </div>
             </div>
@@ -133,98 +201,255 @@ if (isset($_SESSION['order_list_referrer'])) {
                 <!-- Tests Information -->
                 <div class="card mb-4">
                     <div class="card-header">
-                        <h6>Tests (<?php echo count($tests); ?>)</h6>
+                        <div class="d-flex justify-content-between align-items-center">
+                            <h6>Tests (<?php echo count($tests); ?>)</h6>
+                            <?php if ($can_edit): ?>
+                                <small class="text-muted">Click <i class="bi bi-x-circle text-danger"></i> to remove tests</small>
+                            <?php endif; ?>
+                        </div>
                     </div>
                     <div class="card-body">
                         <?php
-                        // Group tests by category
+                        // Group tests by category first
                         $tests_by_category = [];
                         foreach ($tests as $test) {
                             $tests_by_category[$test['category']][] = $test;
                         }
                         
                         foreach ($tests_by_category as $category => $category_tests):
+                            // Now group category tests by sample_id
+                            $category_tests_by_sample = [];
+                            foreach ($category_tests as $test) {
+                                $sample_id = $test['sample_id'];
+                                if (!isset($category_tests_by_sample[$sample_id])) {
+                                    $category_tests_by_sample[$sample_id] = [];
+                                }
+                                $category_tests_by_sample[$sample_id][] = $test;
+                            }
                         ?>
                         <h6 class="mt-3"><?php echo $category; ?></h6>
                         <div class="table-responsive">
                             <table class="table table-sm table-bordered">
                                 <thead class="table-light">
                                     <tr>
-                                        <th>Test Name</th>
-                                        <th>Code</th>
                                         <th>Sample ID</th>
                                         <th>Sample Type</th>
+                                        <th>Test Name</th>
+                                        <th>Code</th>
                                         <th>Status</th>
                                         <th>Results</th>
                                         <th>Actions</th>
+                                        <?php if ($can_edit): ?>
+                                            <th style="width: 40px;">Remove</th>
+                                        <?php endif; ?>
                                     </tr>
                                 </thead>
                                 <tbody>
-                                    <?php foreach ($category_tests as $test): ?>
+                                    <?php 
+                                    $row_counter = 0;
+                                    foreach ($category_tests_by_sample as $sample_id => $sample_tests): 
+                                        $first_test = $sample_tests[0];
+                                        $sample_test_count = count($sample_tests);
+                                    ?>
                                     <tr>
-                                        <td><?php echo $test['test_name']; ?></td>
-                                        <td><code><?php echo $test['test_code']; ?></code></td>
-                                        <td><strong><?php echo $test['sample_id']; ?></strong></td>
-                                        <td><?php echo $test['sample_type']; ?></td>
-                                        <td>
-                                            <span class="badge bg-<?php 
-                                                switch($test['status']) {
-                                                    case 'pending': echo 'secondary'; break;
-                                                    case 'sample-collected': echo 'info'; break;
-                                                    case 'processing': echo 'warning'; break;
-                                                    case 'results-entered': echo 'primary'; break;
-                                                    case 'verified': echo 'success'; break;
-                                                    case 'completed': echo 'success'; break;
-                                                    default: echo 'danger';
-                                                }
-                                            ?>">
-                                                <?php echo $test['status']; ?>
-                                            </span>
+                                        <td rowspan="<?php echo $sample_test_count; ?>">
+                                            <strong><?php echo $sample_id; ?></strong>
                                         </td>
-                                        <td>
-                                            <span class="badge bg-<?php echo $test['result_count'] > 0 ? 'success' : 'secondary'; ?>">
-                                                <?php echo $test['result_count']; ?> results
-                                            </span>
+                                        <td rowspan="<?php echo $sample_test_count; ?>">
+                                            <?php echo $first_test['sample_type']; ?>
                                         </td>
-                                        <td>
-                                            <div class="btn-group btn-group-sm">
-                                                <?php if ($user_role == 'receptionist' && $test['status'] == 'pending'): ?>
-                                                    <!-- Collect button for receptionist -->
-                                                    <form method="POST" action="collect_sample.php" style="display: inline;">
-                                                        <input type="hidden" name="sample_id" value="<?php echo $test['sample_id']; ?>">
-                                                        <input type="hidden" name="order_id" value="<?php echo $order_id; ?>">
-                                                        <button type="submit" class="btn btn-success btn-sm"
-                                                                onclick="return confirm('Mark sample <?php echo $test['sample_id']; ?> as collected?')">
-                                                            <i class="bi bi-droplet"></i> Collect
-                                                        </button>
-                                                    </form>
-                                                <?php elseif ($user_role == 'technician' && 
-                                                            ($test['status'] == 'sample-collected' || 
-                                                            $test['status'] == 'processing')): ?>
-                                                    <!-- Enter Results button for technician -->
-                                                    <a href="enter_results.php?sample_id=<?php echo $test['sample_id']; ?>" 
-                                                    class="btn btn-primary btn-sm">
-                                                        <i class="bi bi-pencil"></i> Enter Results
-                                                    </a>
-                                                <?php elseif ($user_role == 'manager' && $test['status'] == 'results-entered'): ?>
-                                                    <a href="verify_results.php?sample_id=<?php echo $test['sample_id']; ?>" 
-                                                    class="btn btn-success btn-sm">
-                                                        <i class="bi bi-check-circle"></i> Verify
-                                                    </a>
-                                                <?php elseif ($test['status'] == 'verified' || $test['status'] == 'completed'): ?>
-                                                    <a href="view_results.php?sample_id=<?php echo $test['sample_id']; ?>" 
-                                                    class="btn btn-info btn-sm">
-                                                        <i class="bi bi-eye"></i> View Results
-                                                    </a>
-                                                <?php endif; ?>
-                                            </div>
-                                        </td>
-                                    </tr>
+                                        
+                                        <?php foreach ($sample_tests as $index => $test): ?>
+                                            <?php if ($index > 0): ?>
+                                                <tr>
+                                            <?php endif; ?>
+                                            
+                                            <td>
+                                                <strong><?php echo $test['test_name']; ?></strong>
+                                            </td>
+                                            <td>
+                                                <code><?php echo $test['test_code']; ?></code>
+                                            </td>
+                                            
+                                            <td>
+                                                <span class="badge bg-<?php 
+                                                    switch($test['status']) {
+                                                        case 'pending': echo 'secondary'; break;
+                                                        case 'sample-collected': echo 'info'; break;
+                                                        case 'processing': echo 'warning'; break;
+                                                        case 'results-entered': echo 'primary'; break;
+                                                        case 'verified': echo 'success'; break;
+                                                        case 'completed': echo 'success'; break;
+                                                        default: echo 'danger';
+                                                    }
+                                                ?>">
+                                                    <?php echo $test['status']; ?>
+                                                </span>
+                                            </td>
+                                            
+                                            <td>
+                                                <span class="badge bg-<?php echo $test['result_count'] > 0 ? 'success' : 'secondary'; ?>">
+                                                    <?php echo $test['result_count']; ?> results
+                                                </span>
+                                            </td>
+                                            
+                                            <?php if ($index === 0): // Only show actions for first row ?>
+                                                <td rowspan="<?php echo $sample_test_count; ?>">
+                                                    <div class="btn-group btn-group-sm">
+                                                        <?php if ($user_role == 'receptionist' && $first_test['status'] == 'pending'): ?>
+                                                            <!-- Collect button for receptionist - for entire sample -->
+                                                            <form method="POST" action="collect_sample.php" style="display: inline;">
+                                                                <input type="hidden" name="sample_id" value="<?php echo $sample_id; ?>">
+                                                                <input type="hidden" name="order_id" value="<?php echo $order_id; ?>">
+                                                                <input type="hidden" name="all_test_ids" value="<?php 
+                                                                    echo implode(',', array_column($sample_tests, 'id')); 
+                                                                ?>">
+                                                                <button type="submit" class="btn btn-success btn-sm"
+                                                                        onclick="return confirm('Mark sample <?php echo $sample_id; ?> (containing <?php echo $sample_test_count; ?> tests) as collected?')">
+                                                                    <i class="bi bi-droplet"></i> Collect Sample
+                                                                </button>
+                                                            </form>
+                                                        <?php elseif ($user_role == 'technician' && 
+                                                                    ($first_test['status'] == 'sample-collected' || 
+                                                                    $first_test['status'] == 'processing')): ?>
+                                                            <!-- Enter Results button for technician - one per test in sample -->
+                                                            <?php if ($sample_test_count == 1): ?>
+                                                                <!-- Single test in sample -->
+                                                                <a href="enter_results.php?sample_id=<?php echo $sample_id; ?>&test_id=<?php echo $first_test['test_id']; ?>" 
+                                                                class="btn btn-primary btn-sm">
+                                                                    <i class="bi bi-pencil"></i> Enter Results
+                                                                </a>
+                                                            <?php else: ?>
+                                                                <!-- Multiple tests in sample -->
+                                                                <div class="dropdown">
+                                                                    <button class="btn btn-primary btn-sm dropdown-toggle" 
+                                                                            type="button" 
+                                                                            data-bs-toggle="dropdown">
+                                                                        <i class="bi bi-pencil"></i> Enter Results
+                                                                    </button>
+                                                                    <ul class="dropdown-menu">
+                                                                        <?php foreach ($sample_tests as $st): ?>
+                                                                            <li>
+                                                                                <a class="dropdown-item" 
+                                                                                   href="enter_results.php?sample_id=<?php echo $sample_id; ?>&test_id=<?php echo $st['test_id']; ?>">
+                                                                                    <?php echo $st['test_name']; ?>
+                                                                                </a>
+                                                                            </li>
+                                                                        <?php endforeach; ?>
+                                                                    </ul>
+                                                                </div>
+                                                            <?php endif; ?>
+                                                        <?php elseif ($user_role == 'manager' && $first_test['status'] == 'results-entered'): ?>
+                                                            <!-- Verify button for manager -->
+                                                            <?php if ($sample_test_count == 1): ?>
+                                                                <a href="verify_results.php?sample_id=<?php echo $sample_id; ?>&test_id=<?php echo $first_test['test_id']; ?>" 
+                                                                class="btn btn-success btn-sm">
+                                                                    <i class="bi bi-check-circle"></i> Verify
+                                                                </a>
+                                                            <?php else: ?>
+                                                                <div class="dropdown">
+                                                                    <button class="btn btn-success btn-sm dropdown-toggle" 
+                                                                            type="button" 
+                                                                            data-bs-toggle="dropdown">
+                                                                        <i class="bi bi-check-circle"></i> Verify
+                                                                    </button>
+                                                                    <ul class="dropdown-menu">
+                                                                        <?php foreach ($sample_tests as $st): ?>
+                                                                            <li>
+                                                                                <a class="dropdown-item" 
+                                                                                   href="verify_results.php?sample_id=<?php echo $sample_id; ?>&test_id=<?php echo $st['test_id']; ?>">
+                                                                                    <?php echo $st['test_name']; ?>
+                                                                                </a>
+                                                                            </li>
+                                                                        <?php endforeach; ?>
+                                                                    </ul>
+                                                                </div>
+                                                            <?php endif; ?>
+                                                        <?php elseif ($first_test['status'] == 'verified' || $first_test['status'] == 'completed'): ?>
+                                                            <!-- View Results button -->
+                                                            <?php if ($sample_test_count == 1): ?>
+                                                                <a href="view_results.php?sample_id=<?php echo $sample_id; ?>&test_id=<?php echo $first_test['test_id']; ?>" 
+                                                                class="btn btn-info btn-sm">
+                                                                    <i class="bi bi-eye"></i> View Results
+                                                                </a>
+                                                            <?php else: ?>
+                                                                <div class="dropdown">
+                                                                    <button class="btn btn-info btn-sm dropdown-toggle" 
+                                                                            type="button" 
+                                                                            data-bs-toggle="dropdown">
+                                                                        <i class="bi bi-eye"></i> View Results
+                                                                    </button>
+                                                                    <ul class="dropdown-menu">
+                                                                        <?php foreach ($sample_tests as $st): ?>
+                                                                            <li>
+                                                                                <a class="dropdown-item" 
+                                                                                   href="view_results.php?sample_id=<?php echo $sample_id; ?>&test_id=<?php echo $st['test_id']; ?>">
+                                                                                    <?php echo $st['test_name']; ?>
+                                                                                </a>
+                                                                            </li>
+                                                                        <?php endforeach; ?>
+                                                                    </ul>
+                                                                </div>
+                                                            <?php endif; ?>
+                                                        <?php endif; ?>
+                                                    </div>
+                                                </td>
+                                            <?php endif; ?>
+                                            
+                                            <?php if ($can_edit): ?>
+                                                <td>
+                                                    <?php if ($index === 0 && $sample_test_count == 1): ?>
+                                                        <!-- Remove button for single test sample -->
+                                                        <form method="POST" action="" style="display: inline;">
+                                                            <input type="hidden" name="remove_test" value="1">
+                                                            <input type="hidden" name="test_id" value="<?php echo $test['test_id']; ?>">
+                                                            <button type="submit" class="btn btn-outline-danger btn-sm border-0"
+                                                                    onclick="return confirm('Remove <?php echo htmlspecialchars($test['test_name']); ?> from order?')"
+                                                                    title="Remove this test">
+                                                                <i class="bi bi-x-circle"></i>
+                                                            </button>
+                                                        </form>
+                                                    <?php elseif ($index === 0 && $sample_test_count > 1): ?>
+                                                        <!-- Remove button for shared sample - shows which test is being removed -->
+                                                        <div class="dropdown">
+                                                            <button class="btn btn-outline-danger btn-sm border-0 dropdown-toggle" 
+                                                                    type="button" 
+                                                                    data-bs-toggle="dropdown"
+                                                                    title="Remove a test from this sample">
+                                                                <i class="bi bi-x-circle"></i>
+                                                            </button>
+                                                            <ul class="dropdown-menu">
+                                                                <?php foreach ($sample_tests as $st): ?>
+                                                                    <li>
+                                                                        <form method="POST" action="" style="display: inline;">
+                                                                            <input type="hidden" name="remove_test" value="1">
+                                                                            <input type="hidden" name="test_id" value="<?php echo $st['test_id']; ?>">
+                                                                            <button type="submit" class="dropdown-item text-danger" 
+                                                                                    onclick="return confirm('Remove <?php echo htmlspecialchars($st['test_name']); ?> from order?')">
+                                                                                Remove <?php echo $st['test_name']; ?>
+                                                                            </button>
+                                                                        </form>
+                                                                    </li>
+                                                                <?php endforeach; ?>
+                                                            </ul>
+                                                        </div>
+                                                    <?php endif; ?>
+                                                </td>
+                                            <?php endif; ?>
+                                            
+                                            <?php if ($index > 0): ?>
+                                                </tr>
+                                            <?php endif; ?>
+                                        <?php endforeach; ?>
                                     <?php endforeach; ?>
                                 </tbody>
                             </table>
                         </div>
                         <?php endforeach; ?>
+                        
+                        <?php if (empty($tests_by_category)): ?>
+                            <div class="alert alert-info">No tests found for this order.</div>
+                        <?php endif; ?>
                     </div>
                 </div>
 
@@ -239,11 +464,7 @@ if (isset($_SESSION['order_list_referrer'])) {
                             </div>
                             
                             <div>
-                                <?php if ($can_edit): ?>
-                                    <button class="btn btn-warning" onclick="editOrder()">
-                                        <i class="bi bi-pencil"></i> Edit Order
-                                    </button>
-                                <?php endif; ?>
+                                
                                 
                                 <?php if ($can_generate_report): ?>
                                     <a href="generate_report.php?order_id=<?php echo $order_id; ?>" 
@@ -255,7 +476,7 @@ if (isset($_SESSION['order_list_referrer'])) {
                                 <?php if ($can_verify): ?>
                                     <a href="verify_results.php?order_id=<?php echo $order_id; ?>" 
                                        class="btn btn-primary">
-                                        <i class="bi bi-check-circle"></i> Verify Results
+                                        <i class="bi bi-check-circle"></i> Verify All Results
                                     </a>
                                 <?php endif; ?>
                             </div>
@@ -266,16 +487,6 @@ if (isset($_SESSION['order_list_referrer'])) {
         </div>
     </div>
 </div>
-
-<script>
-function editOrder() {
-    if (confirm('Are you sure you want to edit this order? This action cannot be undone.')) {
-        // Implement edit functionality here
-        // You could redirect to an edit page or show a modal
-        alert('Edit functionality to be implemented');
-    }
-}
-</script>
 
 <?php 
 // Clear the referrer session variable
