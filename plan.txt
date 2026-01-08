@@ -1,0 +1,307 @@
+# Simplified DTC Laboratory Management System  
+**No Payments, No Doctors, No Online Transactions**
+
+## **Simplified User Roles & Flow**
+1. **Receptionist/Registrar:** Registers patients and creates orders
+2. **Lab Technician:** Processes samples and enters results
+3. **Lab Manager:** Oversees operations and verifies results
+
+## **Database Structure**
+
+### **Core Tables**
+
+1. **patients** - Patient information
+```sql
+CREATE TABLE patients (
+    id INT PRIMARY KEY AUTO_INCREMENT,
+    patient_code VARCHAR(20) UNIQUE NOT NULL, -- Auto-generated (LAB-001)
+    full_name VARCHAR(200) NOT NULL,
+    phone VARCHAR(20) NOT NULL,
+    email VARCHAR(100),
+    age INT, -- Can use age instead of DOB for simplicity
+    gender ENUM('Male', 'Female', 'Other'),
+    address TEXT,
+    registered_date TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    last_visit_date TIMESTAMP NULL,
+    INDEX idx_phone (phone),
+    INDEX idx_patient_code (patient_code)
+);
+```
+
+2. **tests** - Test master catalog
+```sql
+CREATE TABLE tests (
+    id INT PRIMARY KEY AUTO_INCREMENT,
+    test_code VARCHAR(50) UNIQUE NOT NULL, -- e.g., CBC, LFT, RFT
+    test_name VARCHAR(200) NOT NULL,
+    category VARCHAR(100), -- e.g., Hematology, Biochemistry
+    sample_type VARCHAR(100), -- e.g., Blood, Urine
+    fasting_required BOOLEAN DEFAULT FALSE,
+    turnaround_hours INT DEFAULT 24,
+    is_active BOOLEAN DEFAULT TRUE,
+    instructions TEXT,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+```
+
+3. **test_parameters** - Parameters for each test
+```sql
+CREATE TABLE test_parameters (
+    id INT PRIMARY KEY AUTO_INCREMENT,
+    test_id INT NOT NULL,
+    parameter_name VARCHAR(200) NOT NULL, -- e.g., Hemoglobin, WBC
+    parameter_code VARCHAR(50) NOT NULL, -- e.g., HB, WBC
+    unit VARCHAR(50), -- e.g., g/dL, 10^9/L
+    normal_min DECIMAL(10,2),
+    normal_max DECIMAL(10,2),
+    male_min DECIMAL(10,2), -- Gender-specific ranges
+    male_max DECIMAL(10,2),
+    female_min DECIMAL(10,2),
+    female_max DECIMAL(10,2),
+    child_min DECIMAL(10,2), -- Age-specific ranges
+    child_max DECIMAL(10,2),
+    adult_min DECIMAL(10,2),
+    adult_max DECIMAL(10,2),
+    sort_order INT DEFAULT 0,
+    is_active BOOLEAN DEFAULT TRUE,
+    FOREIGN KEY (test_id) REFERENCES tests(id) ON DELETE CASCADE,
+    INDEX idx_test_id (test_id)
+);
+```
+
+4. **orders** - Test orders
+```sql
+CREATE TABLE orders (
+    id INT PRIMARY KEY AUTO_INCREMENT,
+    order_number VARCHAR(50) UNIQUE NOT NULL, -- Auto-generated (ORD-001)
+    patient_id INT NOT NULL,
+    order_date DATETIME DEFAULT CURRENT_TIMESTAMP,
+    referred_by VARCHAR(200), -- Optional: Doctor/Clinic name
+    clinical_notes TEXT,
+    status ENUM('pending', 'sample-collected', 'processing', 
+                'completed', 'cancelled') DEFAULT 'pending',
+    result_ready_date DATETIME NULL,
+    report_path VARCHAR(500), -- Path to generated PDF
+    collected_by INT, -- Staff ID who collected sample
+    processed_by INT, -- Staff ID who processed
+    verified_by INT, -- Staff ID who verified
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (patient_id) REFERENCES patients(id),
+    INDEX idx_order_number (order_number),
+    INDEX idx_status (status),
+    INDEX idx_order_date (order_date)
+);
+```
+
+5. **order_tests** - Tests within an order
+```sql
+CREATE TABLE order_tests (
+    id INT PRIMARY KEY AUTO_INCREMENT,
+    order_id INT NOT NULL,
+    test_id INT NOT NULL,
+    sample_id VARCHAR(100) UNIQUE, -- Barcode/Sample ID
+    sample_collected_at DATETIME,
+    sample_type VARCHAR(100),
+    status ENUM('pending', 'sample-collected', 'processing', 
+                'results-entered', 'verified', 'completed') DEFAULT 'pending',
+    priority ENUM('normal', 'urgent') DEFAULT 'normal',
+    notes TEXT,
+    FOREIGN KEY (order_id) REFERENCES orders(id) ON DELETE CASCADE,
+    FOREIGN KEY (test_id) REFERENCES tests(id),
+    INDEX idx_sample_id (sample_id),
+    INDEX idx_status (status)
+);
+```
+
+6. **test_results** - Actual test results
+```sql
+CREATE TABLE test_results (
+    id INT PRIMARY KEY AUTO_INCREMENT,
+    order_test_id INT NOT NULL,
+    parameter_id INT NOT NULL,
+    result_value VARCHAR(500) NOT NULL, -- Can be numeric or text
+    result_unit VARCHAR(50),
+    flag ENUM('Normal', 'Low', 'High', 'Abnormal') DEFAULT 'Normal',
+    reference_range VARCHAR(100), -- Display reference range
+    notes TEXT,
+    entered_by INT NOT NULL, -- Technician ID
+    entered_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    verified_by INT,
+    verified_at DATETIME,
+    FOREIGN KEY (order_test_id) REFERENCES order_tests(id) ON DELETE CASCADE,
+    FOREIGN KEY (parameter_id) REFERENCES test_parameters(id),
+    UNIQUE KEY uk_order_parameter (order_test_id, parameter_id),
+    INDEX idx_order_test (order_test_id)
+);
+```
+
+7. **staff** - Laboratory staff (simplified)
+```sql
+CREATE TABLE staff (
+    id INT PRIMARY KEY AUTO_INCREMENT,
+    username VARCHAR(50) UNIQUE NOT NULL,
+    full_name VARCHAR(200) NOT NULL,
+    role ENUM('receptionist', 'technician', 'manager') NOT NULL,
+    password_hash VARCHAR(255) NOT NULL,
+    is_active BOOLEAN DEFAULT TRUE,
+    last_login DATETIME,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+```
+
+8. **reports** - Generated reports metadata
+```sql
+CREATE TABLE reports (
+    id INT PRIMARY KEY AUTO_INCREMENT,
+    order_id INT NOT NULL,
+    report_number VARCHAR(50) UNIQUE NOT NULL,
+    report_path VARCHAR(500) NOT NULL,
+    generated_by INT NOT NULL,
+    generated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    delivered_by INT,
+    delivered_at DATETIME,
+    delivery_method ENUM('hardcopy', 'email', 'whatsapp') DEFAULT 'hardcopy',
+    acknowledgement_receipt BOOLEAN DEFAULT FALSE, -- If patient signed
+    FOREIGN KEY (order_id) REFERENCES orders(id),
+    INDEX idx_report_number (report_number)
+);
+```
+
+## **Minimal Workflow**
+
+### **Scenario 1: Walk-in Patient Registration**
+1. Patient arrives at lab
+2. Receptionist creates patient record (name, phone, age, gender)
+3. Selects tests from catalog
+4. Generates order with unique order number
+5. Prints sample collection labels
+6. Collects sample → updates status to "sample-collected"
+
+### **Scenario 2: Test Processing**
+1. Technician receives samples
+2. Processes tests in lab
+3. Enters results for each parameter
+4. System automatically flags abnormal values based on reference ranges
+5. Marks test as "results-entered"
+
+### **Scenario 3: Report Generation & Delivery**
+1. Manager/Technician verifies all results
+2. System generates PDF report with:
+   - Patient details
+   - Test results with reference ranges
+   - Abnormal values highlighted
+   - QR code for verification
+3. Prints hard copy or saves PDF
+4. Hands report to patient at reception
+5. Marks order as "completed"
+
+## **Core Features**
+
+### **1. Patient Registration**
+- Quick search by phone number (existing patients)
+- Simple form: Name, Phone, Age, Gender, Address
+- Auto-generate patient code
+
+### **2. Test Ordering**
+- Browse test catalog by category
+- Add tests to order
+- Auto-generate order number and sample IDs
+- Print sample collection labels
+
+### **3. Sample Tracking**
+- Sample collected → Processing → Results entered → Verified → Report ready
+- Real-time status updates
+- Technician assignment tracking
+
+### **4. Result Entry**
+- Simple form-based entry for each test parameter
+- Auto-calculate flags (Normal/High/Low)
+- Reference ranges based on age and gender
+- Bulk entry for same test types
+
+### **5. Report Generation**
+- Clean, professional PDF format
+- Patient-friendly language
+- Abnormal values highlighted
+- QR code linking to digital verification
+- Option to print or save as PDF
+
+## **Technology Stack**
+**Backend:** PHP 7.4+ (Plain PHP or CodeIgniter)
+**Frontend:** Bootstrap 5 + jQuery
+**Database:** MySQL 5.7+
+**PDF Generation:** TCPDF or mPDF
+**Barcode:** Simple barcode fonts or library
+
+## **Simple Implementation Plan**
+
+### **Week 1-2: Core Setup**
+- Database creation and configuration
+- Patient registration module
+- Test catalog management
+
+### **Week 3-4: Order Management**
+- Order creation interface
+- Sample ID generation
+- Status tracking
+
+### **Week 5-6: Result Entry**
+- Parameter-based result forms
+- Auto-flagging system
+- Result verification
+
+### **Week 7-8: Reporting**
+- PDF report templates
+- QR code generation
+- Print functionality
+
+### **Week 9-10: Testing & Deployment**
+- Staff training
+- Data migration from existing system
+- Go-live
+
+## **Simplified User Interface**
+
+### **Receptionist Dashboard:**
+1. **Quick Registration** - Simple patient form
+2. **Create Order** - Add tests to cart, generate labels
+3. **Search Orders** - By order number, patient name, phone
+4. **Update Status** - Mark samples as collected
+5. **Print Reports** - Generate and hand to patients
+
+### **Technician Dashboard:**
+1. **Pending Tests** - List of samples to process
+2. **Enter Results** - Form for each test parameter
+3. **My Work** - Tests assigned to me
+4. **Verify Results** - Cross-check other technicians' work
+
+### **Manager Dashboard:**
+1. **All Orders** - View all orders and statuses
+2. **Reports** - Generate various reports
+3. **Test Catalog** - Manage tests and parameters
+4. **Staff Management** - Simple staff accounts
+
+## **Minimal Requirements**
+1. **No online payments** - All payments handled offline
+2. **No patient portal** - Results delivered directly
+3. **No appointment system** - Walk-ins only (can add later)
+4. **No inventory management** - Focus only on test processing
+5. **No doctor interface** - Only lab staff access
+
+## **Key Advantages**
+1. **Simple to use** - Minimal training required
+2. **Fast registration** - 30 seconds per patient
+3. **Accurate results** - Reference range calculations
+4. **Professional reports** - Consistent format
+5. **Easy search** - Find any order quickly
+6. **No internet dependency** - Can work offline after setup
+
+## **Starting Point:**
+1. Create database with above tables
+2. Build patient registration page
+3. Add 20 most common tests with parameters
+4. Create order entry form
+5. Build result entry interface
+6. Design PDF report template
+
+This system focuses **only** on the core lab workflow: registering patients, ordering tests, entering results, and generating reports. Everything else (payments, appointments, patient portal) is excluded for simplicity.
