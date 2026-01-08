@@ -102,7 +102,6 @@ $total_amount = count($tests) * 500; // Example: 500 per test
                     </div>
                 </div>
 
-                <!-- Action Buttons -->
                 <div class="row">
                     <div class="col-md-3 mb-2">
                         <a href="orders.php" class="btn btn-outline-secondary w-100">
