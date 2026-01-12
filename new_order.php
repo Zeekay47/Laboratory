@@ -37,20 +37,21 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST' && isset($_POST['create_order'])) {
         try {
             $db->query('BEGIN TRANSACTION');
             
-            // Generate order number
-            $db->query('SELECT MAX(id) as max_id FROM orders');
+            // Generate order number - FIXED: Get max order number, not max id
+            $db->query('SELECT MAX(CAST(SUBSTRING(order_number, 5) AS UNSIGNED)) as max_order_num FROM orders WHERE order_number LIKE "ORD-%"');
             $result = $db->single();
-            $next_id = ($result['max_id'] ?? 0) + 1;
-            $order_number = 'ORD-' . str_pad($next_id, 5, '0', STR_PAD_LEFT);
+            $next_order_num = ($result['max_order_num'] ?? 0) + 1;
+            $order_number = 'ORD-' . str_pad($next_order_num, 5, '0', STR_PAD_LEFT);
             
             // Create order
-            $db->query('INSERT INTO orders (order_number, patient_id, referred_by, clinical_notes, collected_by) 
-                       VALUES (:order_no, :patient_id, :referred_by, :clinical_notes, :collected_by)');
+            $db->query('INSERT INTO orders (order_number, patient_id, referred_by, clinical_notes, collected_by, status) 
+                       VALUES (:order_no, :patient_id, :referred_by, :clinical_notes, :collected_by, :status)');
             $db->bind(':order_no', $order_number);
             $db->bind(':patient_id', $_POST['patient_id']);
             $db->bind(':referred_by', $_POST['referred_by']);
             $db->bind(':clinical_notes', $_POST['clinical_notes']);
             $db->bind(':collected_by', $_SESSION['user_id']);
+            $db->bind(':status', 'pending');
             
             $db->execute();
             $order_id = $db->lastInsertId();
@@ -76,28 +77,31 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST' && isset($_POST['create_order'])) {
                     $tests_by_sample[$test['sample_type']][] = $test['id'];
                 }
                 
-                // Get base ID for sample numbering
-                $db->query('SELECT MAX(id) as max_id FROM order_tests');
+                // Get the next sample number from existing samples
+                $db->query('SELECT MAX(CAST(SUBSTRING(sample_id, 5) AS UNSIGNED)) as max_sample_num FROM order_tests WHERE sample_id LIKE "SMP-%"');
                 $result = $db->single();
-                $base_sample_id = ($result['max_id'] ?? 0) + 1;
+                $next_sample_num = ($result['max_sample_num'] ?? 0) + 1;
                 
                 // Insert tests grouped by sample type
                 $sample_index = 0;
                 foreach ($tests_by_sample as $sample_type => $test_ids) {
                     // Generate sample ID for this sample type group
-                    $sample_id = 'SMP-' . str_pad($base_sample_id + $sample_index, 6, '0', STR_PAD_LEFT);
+                    $sample_id = 'SMP-' . str_pad($next_sample_num, 6, '0', STR_PAD_LEFT);
                     
                     // Insert all tests with this sample type using the same sample ID
                     foreach ($test_ids as $test_id) {
-                        $db->query('INSERT INTO order_tests (order_id, test_id, sample_id, sample_type) 
-                                   VALUES (:order_id, :test_id, :sample_id, :sample_type)');
+                        $db->query('INSERT INTO order_tests (order_id, test_id, sample_id, sample_type, status, priority) 
+                                   VALUES (:order_id, :test_id, :sample_id, :sample_type, :status, :priority)');
                         $db->bind(':order_id', $order_id);
                         $db->bind(':test_id', $test_id);
                         $db->bind(':sample_id', $sample_id);
                         $db->bind(':sample_type', $sample_type);
+                        $db->bind(':status', 'pending');
+                        $db->bind(':priority', 'normal');
                         $db->execute();
                     }
                     
+                    $next_sample_num++;
                     $sample_index++;
                 }
             }

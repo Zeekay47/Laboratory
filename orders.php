@@ -187,7 +187,8 @@ $orders = $db->resultSet();
                                                 <button type="button" 
                                                         class="btn btn-outline-success collect-sample-btn" 
                                                         data-order-id="<?php echo $order['id']; ?>"
-                                                        title="Collect Sample">
+                                                        data-order-number="<?php echo $order['order_number']; ?>"
+                                                        title="Collect Samples">
                                                     <i class="bi bi-droplet"></i>
                                                 </button>
                                             <?php endif; ?>
@@ -228,25 +229,23 @@ $orders = $db->resultSet();
     </div>
 </div>
 
-<!-- Collect Sample Modal -->
+<!-- Collect Sample Modal with Iframe -->
 <div class="modal fade" id="collectSampleModal" tabindex="-1" aria-hidden="true">
-    <div class="modal-dialog">
+    <div class="modal-dialog modal-lg">
         <div class="modal-content">
-            <form method="POST" action="">
-                <div class="modal-header">
-                    <h5 class="modal-title">Collect Sample</h5>
-                    <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
-                </div>
-                <div class="modal-body">
-                    <p>Mark sample as collected?</p>
-                    <input type="hidden" name="order_id" id="collectOrderId">
-                    <input type="hidden" name="status" value="sample-collected">
-                </div>
-                <div class="modal-footer">
-                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
-                    <button type="submit" name="update_status" class="btn btn-success">Collect Sample</button>
-                </div>
-            </form>
+            <div class="modal-header">
+                <h5 class="modal-title">Collect Samples - Order: <span id="modalOrderNumber"></span></h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+            </div>
+            <div class="modal-body p-0" style="min-height: 500px;">
+                <iframe id="collectSampleFrame" 
+                        src="" 
+                        frameborder="0" 
+                        style="width: 100%; height: 500px; border: none;"></iframe>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Close</button>
+            </div>
         </div>
     </div>
 </div>
@@ -290,6 +289,19 @@ $orders = $db->resultSet();
 .btn-group > .btn {
     min-height: 31px;
 }
+
+/* Iframe styles */
+#iframe-container {
+    width: 100%;
+    height: 500px;
+    overflow: hidden;
+}
+
+#collectSampleFrame {
+    width: 100%;
+    height: 100%;
+    border: none;
+}
 </style>
 
 <script>
@@ -297,7 +309,16 @@ $(document).ready(function() {
     $('.collect-sample-btn').click(function(e) {
         e.preventDefault();
         var orderId = $(this).data('order-id');
-        $('#collectOrderId').val(orderId);
+        var orderNumber = $(this).data('order-number');
+        
+        // Set modal title
+        $('#modalOrderNumber').text(orderNumber);
+        
+        // Load collect_sample.php in iframe with order_id parameter
+        var iframeSrc = 'collect_sample.php?order_id=' + orderId;
+        $('#collectSampleFrame').attr('src', iframeSrc);
+        
+        // Show modal
         $('#collectSampleModal').modal('show');
     });
     
@@ -313,6 +334,14 @@ $(document).ready(function() {
     $('[title]').tooltip({
         trigger: 'hover',
         placement: 'top'
+    });
+    
+    // Listen for messages from iframe to close modal
+    window.addEventListener('message', function(event) {
+        if (event.data === 'closeModal') {
+            $('#collectSampleModal').modal('hide');
+            location.reload(); 
+        }
     });
 });
 </script>

@@ -41,12 +41,25 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST' && isset($_POST['remove_test']) && isse
                 $db->bind(':test_id', $test_id);
                 $db->execute();
                 
-                // Check if this was the only test using this sample_id
-                $db->query('SELECT COUNT(*) as remaining_tests FROM order_tests WHERE sample_id = 
-                           (SELECT sample_id FROM order_tests WHERE order_id = :order_id AND test_id = :test_id)');
+                // Check how many tests remain in this order
+                $db->query('SELECT COUNT(*) as test_count FROM order_tests WHERE order_id = :order_id');
                 $db->bind(':order_id', $order_id);
-                $db->bind(':test_id', $test_id);
-                $result = $db->single();
+                $remaining_tests = $db->single()['test_count'];
+                
+                // If no tests remain, delete the entire order
+                if ($remaining_tests == 0) {
+                    $db->query('DELETE FROM orders WHERE id = :id');
+                    $db->bind(':id', $order_id);
+                    $db->execute();
+                    
+                    $_SESSION['success'] = 'All tests removed. Order has been deleted.';
+                    
+                    $db->query('COMMIT');
+                    
+                    // Redirect to orders list
+                    header('Location: orders.php');
+                    exit();
+                }
                 
                 $db->query('COMMIT');
                 
@@ -83,6 +96,13 @@ $db->query('SELECT o.*, p.* FROM orders o
            WHERE o.id = :id');
 $db->bind(':id', $order_id);
 $order = $db->single();
+
+// If order doesn't exist (was deleted), redirect to orders list
+if (!$order) {
+    $_SESSION['info'] = 'Order not found or has been deleted.';
+    header('Location: orders.php');
+    exit();
+}
 
 // Fetch order tests with details - group by sample_id to identify shared samples
 $db->query('SELECT ot.*, t.test_name, t.test_code, t.category, t.sample_type,
@@ -146,6 +166,10 @@ if (isset($_SESSION['order_list_referrer'])) {
             echo '<div class="alert alert-danger">' . $_SESSION['error'] . '</div>';
             unset($_SESSION['error']);
         }
+        if (isset($_SESSION['info'])) {
+            echo '<div class="alert alert-info">' . $_SESSION['info'] . '</div>';
+            unset($_SESSION['info']);
+        }
         ?>
         
         <div class="card">
@@ -154,7 +178,9 @@ if (isset($_SESSION['order_list_referrer'])) {
                     <h5>Order: <?php echo $order['order_number']; ?></h5>
                     <div>
                         <span class="badge bg-light text-dark">Status: <?php echo $order['status']; ?></span>
-                        
+                        <?php if ($can_edit): ?>
+                            <span class="badge bg-warning ms-2"><i class="bi bi-pencil"></i> Editable</span>
+                        <?php endif; ?>
                     </div>
                 </div>
             </div>
@@ -204,7 +230,7 @@ if (isset($_SESSION['order_list_referrer'])) {
                         <div class="d-flex justify-content-between align-items-center">
                             <h6>Tests (<?php echo count($tests); ?>)</h6>
                             <?php if ($can_edit): ?>
-                                <small class="text-muted">Click <i class="bi bi-x-circle text-danger"></i> to remove tests</small>
+                                <small class="text-muted">Click buttons to collect samples or remove tests</small>
                             <?php endif; ?>
                         </div>
                     </div>
@@ -237,11 +263,7 @@ if (isset($_SESSION['order_list_referrer'])) {
                                         <th>Test Name</th>
                                         <th>Code</th>
                                         <th>Status</th>
-                                        <th>Results</th>
-                                        <th>Actions</th>
-                                        <?php if ($can_edit): ?>
-                                            <th style="width: 40px;">Remove</th>
-                                        <?php endif; ?>
+                                        <th style="width: 150px;">Actions</th>
                                     </tr>
                                 </thead>
                                 <tbody>
@@ -288,16 +310,11 @@ if (isset($_SESSION['order_list_referrer'])) {
                                             </td>
                                             
                                             <td>
-                                                <span class="badge bg-<?php echo $test['result_count'] > 0 ? 'success' : 'secondary'; ?>">
-                                                    <?php echo $test['result_count']; ?> results
-                                                </span>
-                                            </td>
-                                            
-                                            <?php if ($index === 0): // Only show actions for first row ?>
-                                                <td rowspan="<?php echo $sample_test_count; ?>">
-                                                    <div class="btn-group btn-group-sm">
-                                                        <?php if ($user_role == 'receptionist' && $first_test['status'] == 'pending'): ?>
-                                                            <!-- Collect button for receptionist - for entire sample -->
+                                                <div class="d-flex gap-1">
+                                                    <?php if ($user_role == 'receptionist' && $first_test['status'] == 'pending'): ?>
+                                                        <!-- For receptionist with pending status -->
+                                                        <?php if ($index === 0): ?>
+                                                            <!-- Collect button for entire sample - only in first row -->
                                                             <form method="POST" action="collect_sample.php" style="display: inline;">
                                                                 <input type="hidden" name="sample_id" value="<?php echo $sample_id; ?>">
                                                                 <input type="hidden" name="order_id" value="<?php echo $order_id; ?>">
@@ -305,137 +322,64 @@ if (isset($_SESSION['order_list_referrer'])) {
                                                                     echo implode(',', array_column($sample_tests, 'id')); 
                                                                 ?>">
                                                                 <button type="submit" class="btn btn-success btn-sm"
-                                                                        onclick="return confirm('Mark sample <?php echo $sample_id; ?> (containing <?php echo $sample_test_count; ?> tests) as collected?')">
-                                                                    <i class="bi bi-droplet"></i> Collect Sample
+                                                                        onclick="return confirm('Mark sample <?php echo $sample_id; ?> (containing <?php echo $sample_test_count; ?> tests) as collected?')"
+                                                                        title="Collect this sample"
+                                                                        style="min-width: 36px;">
+                                                                    <i class="bi bi-droplet"></i>
                                                                 </button>
                                                             </form>
-                                                        <?php elseif ($user_role == 'technician' && 
-                                                                    ($first_test['status'] == 'sample-collected' || 
-                                                                    $first_test['status'] == 'processing')): ?>
-                                                            <!-- Enter Results button for technician - one per test in sample -->
-                                                            <?php if ($sample_test_count == 1): ?>
-                                                                <!-- Single test in sample -->
-                                                                <a href="enter_results.php?sample_id=<?php echo $sample_id; ?>&test_id=<?php echo $first_test['test_id']; ?>" 
-                                                                class="btn btn-primary btn-sm">
-                                                                    <i class="bi bi-pencil"></i> Enter Results
-                                                                </a>
-                                                            <?php else: ?>
-                                                                <!-- Multiple tests in sample -->
-                                                                <div class="dropdown">
-                                                                    <button class="btn btn-primary btn-sm dropdown-toggle" 
-                                                                            type="button" 
-                                                                            data-bs-toggle="dropdown">
-                                                                        <i class="bi bi-pencil"></i> Enter Results
-                                                                    </button>
-                                                                    <ul class="dropdown-menu">
-                                                                        <?php foreach ($sample_tests as $st): ?>
-                                                                            <li>
-                                                                                <a class="dropdown-item" 
-                                                                                   href="enter_results.php?sample_id=<?php echo $sample_id; ?>&test_id=<?php echo $st['test_id']; ?>">
-                                                                                    <?php echo $st['test_name']; ?>
-                                                                                </a>
-                                                                            </li>
-                                                                        <?php endforeach; ?>
-                                                                    </ul>
-                                                                </div>
-                                                            <?php endif; ?>
-                                                        <?php elseif ($user_role == 'manager' && $first_test['status'] == 'results-entered'): ?>
-                                                            <!-- Verify button for manager -->
-                                                            <?php if ($sample_test_count == 1): ?>
-                                                                <a href="verify_results.php?sample_id=<?php echo $sample_id; ?>&test_id=<?php echo $first_test['test_id']; ?>" 
-                                                                class="btn btn-success btn-sm">
-                                                                    <i class="bi bi-check-circle"></i> Verify
-                                                                </a>
-                                                            <?php else: ?>
-                                                                <div class="dropdown">
-                                                                    <button class="btn btn-success btn-sm dropdown-toggle" 
-                                                                            type="button" 
-                                                                            data-bs-toggle="dropdown">
-                                                                        <i class="bi bi-check-circle"></i> Verify
-                                                                    </button>
-                                                                    <ul class="dropdown-menu">
-                                                                        <?php foreach ($sample_tests as $st): ?>
-                                                                            <li>
-                                                                                <a class="dropdown-item" 
-                                                                                   href="verify_results.php?sample_id=<?php echo $sample_id; ?>&test_id=<?php echo $st['test_id']; ?>">
-                                                                                    <?php echo $st['test_name']; ?>
-                                                                                </a>
-                                                                            </li>
-                                                                        <?php endforeach; ?>
-                                                                    </ul>
-                                                                </div>
-                                                            <?php endif; ?>
-                                                        <?php elseif ($first_test['status'] == 'verified' || $first_test['status'] == 'completed'): ?>
-                                                            <!-- View Results button -->
-                                                            <?php if ($sample_test_count == 1): ?>
-                                                                <a href="view_results.php?sample_id=<?php echo $sample_id; ?>&test_id=<?php echo $first_test['test_id']; ?>" 
-                                                                class="btn btn-info btn-sm">
-                                                                    <i class="bi bi-eye"></i> View Results
-                                                                </a>
-                                                            <?php else: ?>
-                                                                <div class="dropdown">
-                                                                    <button class="btn btn-info btn-sm dropdown-toggle" 
-                                                                            type="button" 
-                                                                            data-bs-toggle="dropdown">
-                                                                        <i class="bi bi-eye"></i> View Results
-                                                                    </button>
-                                                                    <ul class="dropdown-menu">
-                                                                        <?php foreach ($sample_tests as $st): ?>
-                                                                            <li>
-                                                                                <a class="dropdown-item" 
-                                                                                   href="view_results.php?sample_id=<?php echo $sample_id; ?>&test_id=<?php echo $st['test_id']; ?>">
-                                                                                    <?php echo $st['test_name']; ?>
-                                                                                </a>
-                                                                            </li>
-                                                                        <?php endforeach; ?>
-                                                                    </ul>
-                                                                </div>
-                                                            <?php endif; ?>
+                                                        <?php else: ?>
+                                                            <!-- Empty space to align buttons -->
+                                                            <div style="width: 36px;"></div>
                                                         <?php endif; ?>
-                                                    </div>
-                                                </td>
-                                            <?php endif; ?>
-                                            
-                                            <?php if ($can_edit): ?>
-                                                <td>
-                                                    <?php if ($index === 0 && $sample_test_count == 1): ?>
-                                                        <!-- Remove button for single test sample -->
+                                                        
+                                                        <!-- Remove button for each test -->
                                                         <form method="POST" action="" style="display: inline;">
                                                             <input type="hidden" name="remove_test" value="1">
                                                             <input type="hidden" name="test_id" value="<?php echo $test['test_id']; ?>">
-                                                            <button type="submit" class="btn btn-outline-danger btn-sm border-0"
-                                                                    onclick="return confirm('Remove <?php echo htmlspecialchars($test['test_name']); ?> from order?')"
-                                                                    title="Remove this test">
-                                                                <i class="bi bi-x-circle"></i>
+                                                            <button type="submit" class="btn btn-outline-danger btn-sm"
+                                                                    onclick="return confirm('Remove <?php echo htmlspecialchars($test['test_name']); ?> from order?\n\nIf this is the last test, the entire order will be deleted.')"
+                                                                    title="Remove this test"
+                                                                    style="min-width: 36px;">
+                                                                <i class="bi bi-x"></i>
                                                             </button>
                                                         </form>
-                                                    <?php elseif ($index === 0 && $sample_test_count > 1): ?>
-                                                        <!-- Remove button for shared sample - shows which test is being removed -->
-                                                        <div class="dropdown">
-                                                            <button class="btn btn-outline-danger btn-sm border-0 dropdown-toggle" 
-                                                                    type="button" 
-                                                                    data-bs-toggle="dropdown"
-                                                                    title="Remove a test from this sample">
-                                                                <i class="bi bi-x-circle"></i>
-                                                            </button>
-                                                            <ul class="dropdown-menu">
-                                                                <?php foreach ($sample_tests as $st): ?>
-                                                                    <li>
-                                                                        <form method="POST" action="" style="display: inline;">
-                                                                            <input type="hidden" name="remove_test" value="1">
-                                                                            <input type="hidden" name="test_id" value="<?php echo $st['test_id']; ?>">
-                                                                            <button type="submit" class="dropdown-item text-danger" 
-                                                                                    onclick="return confirm('Remove <?php echo htmlspecialchars($st['test_name']); ?> from order?')">
-                                                                                Remove <?php echo $st['test_name']; ?>
-                                                                            </button>
-                                                                        </form>
-                                                                    </li>
-                                                                <?php endforeach; ?>
-                                                            </ul>
-                                                        </div>
+                                                        
+                                                    <?php elseif ($user_role == 'technician' && 
+                                                                ($first_test['status'] == 'sample-collected' || 
+                                                                $first_test['status'] == 'processing')): ?>
+                                                        <!-- Enter Results button for technician -->
+                                                        <a href="enter_results.php?sample_id=<?php echo $sample_id; ?>&test_id=<?php echo $test['test_id']; ?>" 
+                                                        class="btn btn-primary btn-sm"
+                                                        title="Enter results for <?php echo $test['test_name']; ?>"
+                                                        style="min-width: 36px;">
+                                                            <i class="bi bi-pencil"></i>
+                                                        </a>
+                                                        
+                                                    <?php elseif ($user_role == 'manager' && $first_test['status'] == 'results-entered'): ?>
+                                                        <!-- Verify button for manager -->
+                                                        <a href="verify_results.php?sample_id=<?php echo $sample_id; ?>&test_id=<?php echo $test['test_id']; ?>" 
+                                                        class="btn btn-success btn-sm"
+                                                        title="Verify results for <?php echo $test['test_name']; ?>"
+                                                        style="min-width: 36px;">
+                                                            <i class="bi bi-check-circle"></i>
+                                                        </a>
+                                                        
+                                                    <?php elseif ($first_test['status'] == 'verified' || $first_test['status'] == 'completed'): ?>
+                                                        <!-- View Results button -->
+                                                        <a href="view_results.php?sample_id=<?php echo $sample_id; ?>&test_id=<?php echo $test['test_id']; ?>" 
+                                                        class="btn btn-info btn-sm"
+                                                        title="View results for <?php echo $test['test_name']; ?>"
+                                                        style="min-width: 36px;">
+                                                            <i class="bi bi-eye"></i>
+                                                        </a>
+                                                        
+                                                    <?php else: ?>
+                                                        <!-- For other states, show empty space for alignment -->
+                                                        <div style="width: 72px;"></div>
                                                     <?php endif; ?>
-                                                </td>
-                                            <?php endif; ?>
+                                                </div>
+                                            </td>
                                             
                                             <?php if ($index > 0): ?>
                                                 </tr>
@@ -464,7 +408,13 @@ if (isset($_SESSION['order_list_referrer'])) {
                             </div>
                             
                             <div>
-                                
+                                <?php if ($can_edit && count($tests) > 0): ?>
+                                    <!-- Add More Tests Button -->
+                                    <a href="add_tests_to_order.php?order_id=<?php echo $order_id; ?>" 
+                                       class="btn btn-primary">
+                                        <i class="bi bi-plus-circle"></i> Add More Tests
+                                    </a>
+                                <?php endif; ?>
                                 
                                 <?php if ($can_generate_report): ?>
                                     <a href="generate_report.php?order_id=<?php echo $order_id; ?>" 
@@ -487,6 +437,48 @@ if (isset($_SESSION['order_list_referrer'])) {
         </div>
     </div>
 </div>
+
+<style>
+/* Custom styles for better button alignment */
+.btn-sm {
+    padding: 0.25rem 0.5rem;
+    font-size: 0.875rem;
+    line-height: 1.5;
+}
+
+.table td {
+    vertical-align: middle;
+}
+
+.d-flex.gap-1 > * {
+    margin-right: 0.25rem;
+}
+
+.d-flex.gap-1 > *:last-child {
+    margin-right: 0;
+}
+
+/* Tooltip styles */
+[title] {
+    position: relative;
+}
+
+[title]:hover:after {
+    content: attr(title);
+    padding: 4px 8px;
+    color: #fff;
+    background-color: rgba(0,0,0,0.8);
+    border-radius: 4px;
+    position: absolute;
+    bottom: 100%;
+    left: 50%;
+    transform: translateX(-50%);
+    white-space: nowrap;
+    font-size: 12px;
+    z-index: 1000;
+    margin-bottom: 5px;
+}
+</style>
 
 <?php 
 // Clear the referrer session variable
