@@ -245,27 +245,23 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST' && isset($_POST['create_order'])) {
                             <div class="card">
                                 <div class="card-header bg-light">
                                     <h6>Selected Tests <span id="selectedCount" class="badge bg-primary">0</span></h6>
-                                    <small class="text-muted">Tests grouped by sample type will share sample containers</small>
                                 </div>
                                 <div class="card-body">
                                     <div id="selectedTestsList" class="mb-3">
                                         <p class="text-muted">No tests selected yet.</p>
                                     </div>
                                     
-                                    <!-- Sample Grouping Preview -->
-                                    <div id="sampleGroupingPreview" class="mb-4" style="display: none;">
-                                        <h6>Sample Grouping Preview</h6>
-                                        <div id="sampleGroups" class="row"></div>
-                                    </div>
-                                    
                                     <div class="d-grid">
-                                        <button type="submit" name="create_order" class="btn btn-success btn-lg"
-                                                <?php echo !$patient ? 'disabled' : ''; ?>>
-                                            <i class="bi bi-check-circle"></i> Create Order & Print Labels
+                                        <button type="submit" name="create_order" id="createOrderBtn" class="btn btn-success btn-lg" disabled>
+                                            <i class="bi bi-check-circle"></i> Create Order
                                         </button>
-                                        <?php if (!$patient): ?>
-                                            <small class="text-danger">Please select a patient first</small>
-                                        <?php endif; ?>
+                                        <small id="orderBtnMessage" class="text-danger mt-1">
+                                            <?php if (!$patient): ?>
+                                                Please select a patient first
+                                            <?php else: ?>
+                                                Please select at least one test
+                                            <?php endif; ?>
+                                        </small>
                                     </div>
                                 </div>
                             </div>
@@ -301,7 +297,29 @@ $(document).ready(function() {
         return testsBySample;
     }
     
-    // Update selected tests count, list and sample grouping preview
+    // Function to update Create Order button state
+    function updateCreateOrderButton() {
+        var hasPatient = <?php echo $patient ? 'true' : 'false'; ?>;
+        var hasTests = $('.test-checkbox:checked').length > 0;
+        var btn = $('#createOrderBtn');
+        var message = $('#orderBtnMessage');
+        
+        if (hasPatient && hasTests) {
+            btn.prop('disabled', false);
+            message.hide();
+        } else {
+            btn.prop('disabled', true);
+            message.show();
+            
+            if (!hasPatient) {
+                message.text('Please select a patient first');
+            } else if (!hasTests) {
+                message.text('Please select at least one test');
+            }
+        }
+    }
+    
+    // Update selected tests count and list
     function updateSelectedTests() {
         var testsBySample = groupTestsBySampleType();
         var totalCount = 0;
@@ -336,75 +354,43 @@ $(document).ready(function() {
                 });
             }
             listHtml += '</div>';
-            
-            // Show sample grouping preview
-            showSampleGroupingPreview(testsBySample);
         } else {
             listHtml = '<p class="text-muted">No tests selected yet.</p>';
-            $('#sampleGroupingPreview').hide();
         }
         
         $('#selectedTestsList').html(listHtml);
-    }
-    
-    // Show sample grouping preview
-    function showSampleGroupingPreview(testsBySample) {
-        var sampleIndex = 1;
-        var groupsHtml = '';
         
-        for (var sampleType in testsBySample) {
-            var testCount = testsBySample[sampleType].length;
-            var testList = testsBySample[sampleType].map(function(test, index) {
-                return '<small>' + (index + 1) + '. ' + test.name + '</small>';
-            }).join('<br>');
-            
-            groupsHtml += '<div class="col-md-4 mb-3">';
-            groupsHtml += '<div class="card border-primary">';
-            groupsHtml += '<div class="card-header bg-primary text-white">';
-            groupsHtml += '<strong>Sample #' + sampleIndex + '</strong>';
-            groupsHtml += '</div>';
-            groupsHtml += '<div class="card-body">';
-            groupsHtml += '<h6 class="card-title">' + sampleType + '</h6>';
-            groupsHtml += '<p class="card-text">';
-            groupsHtml += '<strong>' + testCount + ' test(s) will share this sample</strong><br>';
-            groupsHtml += testList;
-            groupsHtml += '</p>';
-            groupsHtml += '</div>';
-            groupsHtml += '</div>';
-            groupsHtml += '</div>';
-            
-            sampleIndex++;
-        }
-        
-        $('#sampleGroups').html(groupsHtml);
-        $('#sampleGroupingPreview').show();
+        // Update button state
+        updateCreateOrderButton();
     }
     
     // Initialize
     updateSelectedTests();
+    updateCreateOrderButton();
     
     // Update on checkbox change
-    $('.test-checkbox').change(updateSelectedTests);
+    $('.test-checkbox').change(function() {
+        updateSelectedTests();
+    });
     
-    // Form submission confirmation
+    // Form submission - NO CONFIRMATION ALERT
     $('#orderForm').submit(function(e) {
-        if ($('.test-checkbox:checked').length === 0) {
+        var hasTests = $('.test-checkbox:checked').length > 0;
+        var hasPatient = <?php echo $patient ? 'true' : 'false'; ?>;
+        
+        // Final validation (redundant but safe)
+        if (!hasPatient || !hasTests) {
             e.preventDefault();
-            alert('Please select at least one test.');
+            if (!hasPatient) {
+                alert('Please select a patient first.');
+            } else if (!hasTests) {
+                alert('Please select at least one test.');
+            }
             return false;
         }
         
-        // Optional: Show confirmation with sample grouping info
-        var testsBySample = groupTestsBySampleType();
-        var sampleCount = Object.keys(testsBySample).length;
-        var testCount = $('.test-checkbox:checked').length;
-        
-        if (confirm('Creating order with ' + testCount + ' test(s) requiring ' + sampleCount + ' sample container(s). Continue?')) {
-            return true;
-        } else {
-            e.preventDefault();
-            return false;
-        }
+        // Proceed with form submission - NO CONFIRMATION DIALOG
+        return true;
     });
 });
 </script>
