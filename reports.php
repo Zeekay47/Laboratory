@@ -288,44 +288,56 @@ $order_stats = $db->single();
                                                 <?php endif; ?>
                                             </td>
                                             <td>
-    <div class="btn-group btn-group-sm">
-        <?php if ($file_exists): ?>
-            <a href="reports/<?php echo $report['report_path']; ?>" 
-               target="_blank" class="btn btn-outline-primary" title="View Report">
-                <i class="bi bi-eye"></i>
-            </a>
-            
-            <!-- DIRECT PRINT BUTTON -->
-            <button class="btn btn-outline-warning print-report-btn" 
-                    data-report-path="reports/<?php echo $report['report_path']; ?>"
-                    data-report-name="<?php echo $report['report_number']; ?>"
-                    title="Print Report">
-                <i class="bi bi-printer"></i>
-            </button>
-            
-            <!-- FALLBACK DOWNLOAD BUTTON (hidden) -->
-            <a href="reports/<?php echo $report['report_path']; ?>" 
-               download class="btn btn-outline-success download-report-btn" 
-               style="display: none;"
-               title="Download PDF">
-                <i class="bi bi-download"></i>
-            </a>
-            
-        <?php else: ?>
-            <span class="btn btn-outline-danger" title="Report file missing">
-                <i class="bi bi-exclamation-triangle"></i>
-            </span>
-        <?php endif; ?>
-        
-        <?php if (!$report['delivered_at']): ?>
-            <button class="btn btn-outline-primary" 
-                    onclick="markDelivered(<?php echo $report['id']; ?>)"
-                    title="Mark as Delivered">
-                <i class="bi bi-check-lg"></i>
-            </button>
-        <?php endif; ?>
-    </div>
-</td>
+                                                <div class="btn-group btn-group-sm">
+                                                    <?php if ($file_exists): ?>
+                                                        <a href="reports/<?php echo $report['report_path']; ?>" 
+                                                           target="_blank" class="btn btn-outline-primary" title="View Report">
+                                                            <i class="bi bi-eye"></i>
+                                                        </a>
+                                                        
+                                                        <!-- DIRECT PRINT BUTTON -->
+                                                        <button class="btn btn-outline-warning print-report-btn" 
+                                                                data-report-path="reports/<?php echo $report['report_path']; ?>"
+                                                                data-report-name="<?php echo $report['report_number']; ?>"
+                                                                title="Print Report">
+                                                            <i class="bi bi-printer"></i>
+                                                        </button>
+                                                        
+                                                        <!-- SEND BUTTON -->
+                                                        <button class="btn btn-outline-info send-report-btn" 
+                                                                data-report-id="<?php echo $report['id']; ?>"
+                                                                data-order-number="<?php echo $report['order_number']; ?>"
+                                                                data-report-number="<?php echo $report['report_number']; ?>"
+                                                                data-patient-name="<?php echo htmlspecialchars($report['full_name']); ?>"
+                                                                data-patient-email="<?php echo $report['email']; ?>"
+                                                                data-report-path="reports/<?php echo $report['report_path']; ?>"
+                                                                title="Send Report via Email">
+                                                            <i class="bi bi-send"></i>
+                                                        </button>
+                                                        
+                                                        <!-- FALLBACK DOWNLOAD BUTTON (hidden) -->
+                                                        <a href="reports/<?php echo $report['report_path']; ?>" 
+                                                           download class="btn btn-outline-success download-report-btn" 
+                                                           style="display: none;"
+                                                           title="Download PDF">
+                                                            <i class="bi bi-download"></i>
+                                                        </a>
+                                                        
+                                                    <?php else: ?>
+                                                        <span class="btn btn-outline-danger" title="Report file missing">
+                                                            <i class="bi bi-exclamation-triangle"></i>
+                                                        </span>
+                                                    <?php endif; ?>
+                                                    
+                                                    <?php if (!$report['delivered_at']): ?>
+                                                        <button class="btn btn-outline-primary" 
+                                                                onclick="markDelivered(<?php echo $report['id']; ?>)"
+                                                                title="Mark as Delivered">
+                                                            <i class="bi bi-check-lg"></i>
+                                                        </button>
+                                                    <?php endif; ?>
+                                                </div>
+                                            </td>
                                         </tr>
                                         <?php endforeach; ?>
                                     </tbody>
@@ -347,7 +359,7 @@ $order_stats = $db->single();
                             No manual generation is required by receptionists.
                         </div>
                         <div class="row">
-                            <div class="col-md-4">
+                            <div class="col-md-3">
                                 <div class="card text-center h-100">
                                     <div class="card-body">
                                         <i class="bi bi-robot" style="font-size: 3rem; color: #28a745;"></i>
@@ -356,7 +368,7 @@ $order_stats = $db->single();
                                     </div>
                                 </div>
                             </div>
-                            <div class="col-md-4">
+                            <div class="col-md-3">
                                 <div class="card text-center h-100">
                                     <div class="card-body">
                                         <i class="bi bi-download" style="font-size: 3rem; color: #0d6efd;"></i>
@@ -365,7 +377,7 @@ $order_stats = $db->single();
                                     </div>
                                 </div>
                             </div>
-                            <div class="col-md-4">
+                            <div class="col-md-3">
                                 <div class="card text-center h-100">
                                     <div class="card-body">
                                         <i class="bi bi-check-lg" style="font-size: 3rem; color: #ffc107;"></i>
@@ -374,8 +386,34 @@ $order_stats = $db->single();
                                     </div>
                                 </div>
                             </div>
+                            <div class="col-md-3">
+                                <div class="card text-center h-100">
+                                    <div class="card-body">
+                                        <i class="bi bi-send" style="font-size: 3rem; color: #6f42c1;"></i>
+                                        <h5>Send Reports</h5>
+                                        <p>Send reports via Email directly to patients.</p>
+                                    </div>
+                                </div>
+                            </div>
                         </div>
                     </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Send Report Modal -->
+<div class="modal fade" id="sendReportModal" tabindex="-1" aria-labelledby="sendReportModalLabel" aria-hidden="true">
+    <div class="modal-dialog modal-lg">
+        <div class="modal-content">
+            <div class="modal-header bg-info text-white">
+                <h5 class="modal-title" id="sendReportModalLabel">Send Report via Email</h5>
+                <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal" aria-label="Close"></button>
+            </div>
+            <div class="modal-body">
+                <div id="sendReportContent">
+                    <!-- Content will be loaded dynamically -->
                 </div>
             </div>
         </div>
@@ -406,12 +444,214 @@ $(document).ready(function() {
             window.open(reportPath, '_blank');
         }
     });
+    
+    // Handle send button click
+    $('.send-report-btn').click(function() {
+        const reportId = $(this).data('report-id');
+        const orderNumber = $(this).data('order-number');
+        const reportNumber = $(this).data('report-number');
+        const patientName = $(this).data('patient-name');
+        const patientEmail = $(this).data('patient-email');
+        const reportPath = $(this).data('report-path');
+        
+        // Load send form in modal
+        const sendFormHtml = `
+            <div class="row">
+                <div class="col-md-12">
+                    <div class="alert alert-info">
+                        <h6><i class="bi bi-info-circle"></i> Send Report via Email</h6>
+                        <p><strong>Order:</strong> ${orderNumber}<br>
+                        <strong>Report:</strong> ${reportNumber}<br>
+                        <strong>Patient:</strong> ${patientName}</p>
+                    </div>
+                    
+                    <form id="sendReportForm">
+                        <input type="hidden" id="report_id" value="${reportId}">
+                        <input type="hidden" id="report_path" value="${reportPath}">
+                        <input type="hidden" id="send_email" value="on">
+                        
+                        <div class="mb-3">
+                            <label for="email_to" class="form-label">Email Address *</label>
+                            <input type="email" class="form-control" id="email_to" 
+                                   value="${patientEmail}" placeholder="patient@example.com" required>
+                        </div>
+                        <div class="mb-3">
+                            <label for="email_subject" class="form-label">Subject</label>
+                            <input type="text" class="form-control" id="email_subject" 
+                                   value="Your Lab Report - ${orderNumber}" required>
+                        </div>
+                        <div class="mb-3">
+                            <label for="email_message" class="form-label">Message</label>
+                            <textarea class="form-control" id="email_message" rows="4" required>Dear ${patientName},
+
+Your lab test report for Order ${orderNumber} is ready.
+
+Please find your report attached.
+
+Best regards,
+Lab Management</textarea>
+                        </div>
+                        
+                        <div class="d-grid gap-2">
+                            <button type="submit" class="btn btn-primary btn-lg">
+                                <i class="bi bi-send-fill"></i> Send Report via Email
+                            </button>
+                            <button type="button" class="btn btn-outline-secondary" onclick="$('#sendReportModal').modal('hide')">
+                                Cancel
+                            </button>
+                        </div>
+                    </form>
+                </div>
+            </div>
+        `;
+        
+        // Set content and show modal
+        $('#sendReportContent').html(sendFormHtml);
+        $('#sendReportModal').modal('show');
+        
+        // Handle form submission
+        $('#sendReportForm').off('submit').on('submit', function(e) {
+            e.preventDefault();
+            sendReport();
+        });
+    });
 });
 
 function extractOrderIdFromPath(path) {
     // Extract order ID from filename like report_ORD-00001_20260105_114956.pdf
     const match = path.match(/report_ORD-(\d+)_/);
     return match ? match[1] : null;
+}
+
+function sendReport() {
+    const formData = {
+        report_id: $('#report_id').val(),
+        send_email: $('#send_email').val(),
+        email_to: $('#email_to').val(),
+        email_subject: $('#email_subject').val(),
+        email_message: $('#email_message').val(),
+        report_path: $('#report_path').val()
+    };
+    
+    // Validate email
+    if (!formData.email_to) {
+        alert('Email address is required');
+        return;
+    }
+    
+    // Show loading
+    $('#sendReportContent').html(`
+        <div class="text-center py-5">
+            <div class="spinner-border text-primary" role="status">
+                <span class="visually-hidden">Loading...</span>
+            </div>
+            <p class="mt-3">Sending report...</p>
+        </div>
+    `);
+    
+    // Send via AJAX
+    $.ajax({
+        url: 'send_report.php',
+        type: 'POST',
+        data: formData,
+        success: function(response) {
+            console.log('Raw response:', response); // Debug log
+            
+            try {
+                // Try to parse JSON
+                let result;
+                if (typeof response === 'string') {
+                    result = JSON.parse(response);
+                } else {
+                    result = response; // Already parsed if dataType is json
+                }
+                
+                if (result.success) {
+                    $('#sendReportContent').html(`
+                        <div class="text-center py-5">
+                            <div class="alert alert-success">
+                                <i class="bi bi-check-circle-fill" style="font-size: 3rem;"></i>
+                                <h4 class="mt-3">Report Sent Successfully!</h4>
+                                <p>${result.message}</p>
+                                <button class="btn btn-primary mt-3" onclick="$('#sendReportModal').modal('hide'); location.reload();">
+                                    Close
+                                </button>
+                            </div>
+                        </div>
+                    `);
+                } else {
+                    $('#sendReportContent').html(`
+                        <div class="text-center py-5">
+                            <div class="alert alert-danger">
+                                <i class="bi bi-exclamation-triangle-fill" style="font-size: 3rem;"></i>
+                                <h4 class="mt-3">Failed to Send Report</h4>
+                                <p>${result.message || 'Unknown error occurred'}</p>
+                                <div class="mt-3">
+                                    <button class="btn btn-primary" onclick="location.reload()">
+                                        Try Again
+                                    </button>
+                                    <button class="btn btn-outline-secondary ms-2" onclick="$('#sendReportModal').modal('hide')">
+                                        Close
+                                    </button>
+                                </div>
+                            </div>
+                        </div>
+                    `);
+                }
+            } catch (e) {
+                console.error('JSON Parse Error:', e);
+                console.error('Response text:', response);
+                
+                $('#sendReportContent').html(`
+                    <div class="text-center py-5">
+                        <div class="alert alert-danger">
+                            <i class="bi bi-exclamation-triangle-fill" style="font-size: 3rem;"></i>
+                            <h4 class="mt-3">Server Error</h4>
+                            <p>Could not process server response.</p>
+                            <p><small>Technical details: ${typeof response === 'string' ? response.substring(0, 200) : 'Invalid response format'}</small></p>
+                            <div class="mt-3">
+                                <button class="btn btn-primary" onclick="location.reload()">
+                                    Reload Page
+                                </button>
+                                <button class="btn btn-outline-secondary ms-2" onclick="$('#sendReportModal').modal('hide')">
+                                    Close
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                `);
+            }
+        },
+        error: function(xhr, status, error) {
+            console.error('AJAX Error:', status, error);
+            
+            let errorMessage = 'Request failed';
+            if (xhr.responseText) {
+                try {
+                    const errorResponse = JSON.parse(xhr.responseText);
+                    errorMessage = errorResponse.message || errorMessage;
+                } catch (e) {
+                    errorMessage = xhr.responseText.substring(0, 200);
+                }
+            }
+            
+            $('#sendReportContent').html(`
+                <div class="text-center py-5">
+                    <div class="alert alert-danger">
+                        <h4>Request Failed</h4>
+                        <p>Status: ${status}</p>
+                        <p>Error: ${error}</p>
+                        <p>Details: ${errorMessage}</p>
+                        <div class="mt-3">
+                            <button class="btn btn-primary" onclick="$('#sendReportModal').modal('hide')">
+                                Close
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            `);
+        }
+    });
 }
 
 function attemptDirectPrint(orderId, reportName) {
